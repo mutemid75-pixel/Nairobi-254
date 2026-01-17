@@ -1,0 +1,257 @@
+import os
+
+root = "MonsterStudy_v2"
+
+folders = [
+    ".github/workflows",
+    "app/src/main/java/com/monster/study",
+    "app/src/main/assets/models",
+    "app/src/main/assets/documents",
+]
+
+for f in folders:
+    os.makedirs(os.path.join(root, f), exist_ok=True)
+
+# -------------------- MonsterActivity.kt --------------------
+monster_kotlin_code = """
+package com.monster.study
+
+import android.app.*
+import android.content.*
+import android.os.*
+import android.speech.tts.TextToSpeech
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.appcompat.app.AppCompatActivity
+import org.tensorflow.lite.Interpreter
+import java.io.FileInputStream
+import java.nio.MappedByteBuffer
+import java.nio.channels.FileChannel
+import java.util.*
+
+class MonsterActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
+
+    private lateinit var webView: WebView
+    private lateinit var tts: TextToSpeech
+    private lateinit var modelController: ModelController
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        tts = TextToSpeech(this, this)
+        modelController = ModelController(this)
+
+        webView = WebView(this)
+        webView.settings.javaScriptEnabled = true
+        webView.addJavascriptInterface(MonsterBridge(), "Monster")
+        webView.webViewClient = WebViewClient()
+        webView.loadUrl("file:///android_asset/index.html")
+        setContentView(webView)
+    }
+
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) tts.language = Locale.US
+    }
+
+    inner class MonsterBridge {
+
+        @JavascriptInterface
+        fun speak(text: String) { tts.speak(text, TextToSpeech.QUEUE_FLUSH,null,"MonsterUtterance") }
+
+        @JavascriptInterface
+        fun summarizeText(text: String){
+            val summary = modelController.summarize(text)
+            webView.post { webView.evaluateJavascript("alert('Summary:\\n$summary')", null) }
+            tts.speak(summary, TextToSpeech.QUEUE_FLUSH,null,"MonsterSummary")
+        }
+
+        @JavascriptInterface
+        fun paraphraseText(text: String){
+            val para = modelController.paraphrase(text)
+            webView.post { webView.evaluateJavascript("alert('Paraphrased:\\n$para')", null) }
+            tts.speak(para, TextToSpeech.QUEUE_FLUSH,null,"MonsterPara")
+        }
+
+        @JavascriptInterface
+        fun generateMCQs(text: String){
+            val mcqs = modelController.generateMCQs(text).joinToString("\\n")
+            webView.post { webView.evaluateJavascript("alert('MCQs:\\n$mcqs')", null) }
+        }
+
+        @JavascriptInterface
+        fun command(cmd: String){
+            when {
+                cmd.contains("read", true) -> speak(text="")
+                cmd.contains("pause", true) -> tts.stop()
+                cmd.contains("language", true) -> {
+                    tts.language = if(tts.language==Locale.US) Locale.UK else Locale.US
+                }
+            }
+        }
+    }
+
+    inner class ModelController(val context: Context) {
+        private val tflite: Interpreter by lazy { Interpreter(loadModelFile("monster_v2.tflite")) }
+
+        private fun loadModelFile(filename: String): MappedByteBuffer {
+            val fileDescriptor = context.assets.openFd("models/$filename")
+            val inputStream = FileInputStream(fileDescriptor.fileDescriptor)
+            val channel = inputStream.channel
+            return channel.map(FileChannel.MapMode.READ_ONLY, fileDescriptor.startOffset, fileDescriptor.declaredLength)
+        }
+
+        fun summarize(text: String): String { return text.take(150) } // placeholder
+        fun paraphrase(text: String): String { return text } // placeholder
+        fun generateMCQs(text: String): List<String> { return listOf("Q1: ...","Q2: ...") } // placeholder
+        fun generateCloze(text: String): String { return text.replaceFirst(" ","____") }
+    }
+}
+"""
+
+# -------------------- index.html --------------------
+index_html = """
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Monster v2.1</title></head>
+<body>
+<h2>Monster v2.1 Dashboard</h2>
+
+<textarea id="textArea" placeholder="Enter text or select document"></textarea><br>
+
+<button onclick="read()">Read Aloud</button>
+<button onclick="summarize()">Summarize</button>
+<button onclick="paraphrase()">Paraphrase</button>
+<button onclick="generateMCQs()">MCQs</button>
+<button onclick="cloze()">Cloze</button>
+
+<select id="langSelect" onchange="setLang()">
+  <option value="en-US">English</option>
+  <option value="fr-FR">French</option>
+  <option value="es-ES">Spanish</option>
+</select>
+
+<script>
+function read(){ Monster.speak(document.getElementById('textArea').value) }
+function summarize(){ Monster.summarizeText(document.getElementById('textArea').value) }
+function paraphrase(){ Monster.paraphraseText(document.getElementById('textArea').value) }
+function generateMCQs(){ Monster.generateMCQs(document.getElementById('textArea').value) }
+function cloze(){ alert("Cloze: "+document.getElementById('textArea').value.replace(" ","____")) }
+function setLang(){ alert("Language changed") }
+</script>
+</body>
+</html>
+"""
+
+# -------------------- Manifest --------------------
+manifest = """<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.monster.study">
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <application
+        android:allowBackup="true"
+        android:label="Monster"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+        <activity
+            android:name=".MonsterActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>"""
+
+# -------------------- Gradle --------------------
+root_build_gradle = """buildscript {
+    repositories { google(); mavenCentral() }
+    dependencies { classpath "com.android.tools.build:gradle:8.2.0" }
+}
+allprojects { repositories { google(); mavenCentral() } }"""
+
+settings_gradle = """rootProject.name = "MonsterStudy_v2"
+include ':app'"""
+
+app_build_gradle = """plugins { id 'com.android.application' }
+android {
+    namespace 'com.monster.study'
+    compileSdk 34
+    defaultConfig {
+        applicationId "com.monster.study"
+        minSdk 26
+        targetSdk 34
+        versionCode 3
+        versionName "2.1"
+    }
+    buildTypes { release { minifyEnabled false } }
+}
+dependencies {
+    implementation "androidx.appcompat:appcompat:1.7.0"
+}
+"""
+
+# -------------------- GitHub Workflow --------------------
+workflow = """name: Build & Release Monster v2.1 APK
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Grant execute permission for Gradle
+        run: chmod +x ./gradlew
+      - name: Build Debug APK
+        run: ./gradlew clean assembleDebug
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Monster-v2.1-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Create Release
+        id: create_release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v2.1-${{ github.run_number }}
+          name: Monster v2.1
+          body: "Automated release of MonsterStudy v2.1 APK"
+          draft: false
+          prerelease: false
+      - name: Upload APK to Release
+        uses: actions/upload-release-asset@v2
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: app/build/outputs/apk/debug/app-debug.apk
+          asset_name: Monster-v2.1.apk
+          asset_content_type: application/vnd.android.package-archive
+"""
+
+# -------------------- Write all files --------------------
+files = {
+    "app/src/main/java/com/monster/study/MonsterActivity.kt": monster_kotlin_code,
+    "app/src/main/assets/index.html": index_html,
+    "app/src/main/AndroidManifest.xml": manifest,
+    "build.gradle": root_build_gradle,
+    "settings.gradle": settings_gradle,
+    "app/build.gradle": app_build_gradle,
+    ".github/workflows/android-release.yml": workflow,
+}
+
+for path, content in files.items():
+    full_path = os.path.join(root, path)
+    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+    with open(full_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+print(f"Monster v2.1 fully generated in folder '{root}'. Push to GitHub to build APK and auto-release!")
